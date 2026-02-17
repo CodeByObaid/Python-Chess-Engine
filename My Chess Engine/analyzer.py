@@ -72,6 +72,11 @@ class MoveAnalyzer:
         
         return loss * multiplier
 
+    def get_material_balance(self, board):
+        white = self.count_material(board, chess.WHITE)
+        black = self.count_material(board, chess.BLACK)
+        return white - black
+
     def analyze_move(self, board, move_uci, time_limit=0.1, depth_limit=18, engine=None):
         local_engine = None
         if engine:
@@ -85,6 +90,11 @@ class MoveAnalyzer:
             move = chess.Move.from_uci(move_uci)
             turn_color = board.turn
             
+            # Record starting material balance (Relative to mover)
+            start_balance = self.get_material_balance(board)
+            if turn_color == chess.BLACK:
+                start_balance = -start_balance
+
             # Get engine metrics before the move
             info_before = search_engine.analyse(board, chess.engine.Limit(time=time_limit, depth=depth_limit), multipv=5)
             pvs = info_before if isinstance(info_before, list) else [info_before]
@@ -115,8 +125,6 @@ class MoveAnalyzer:
             except:
                 best_line_san = ""
             
-            mat_before = self.count_material(board, turn_color)
-            
             # Execute move to analyze resulting position
             is_capture = board.is_capture(move)
             is_check = board.gives_check(move)
@@ -127,8 +135,18 @@ class MoveAnalyzer:
             score_after_obj = info_after["score"].white()
             eval_after_white = self.get_score_value(score_after_obj)
             
-            mat_after = self.count_material(board, turn_color)
-            material_delta = mat_after - mat_before 
+            # Check projected material balance (Simulate PV)
+            temp_board = board.copy()
+            pv_moves = info_after.get("pv", [])
+            # Look ahead up to 6 plies (3 full moves) to catch recaptures
+            for pv_move in pv_moves[:6]:
+                temp_board.push(pv_move)
+            
+            end_balance = self.get_material_balance(temp_board)
+            if turn_color == chess.BLACK:
+                end_balance = -end_balance
+            
+            material_delta = end_balance - start_balance
             
             # Calculate evaluation changes
             if turn_color == chess.WHITE:
@@ -164,7 +182,8 @@ class MoveAnalyzer:
             # Is Forced?
             board.pop() 
             legal_moves_count = board.legal_moves.count()
-            is_forced = (legal_moves_count == 1) or (is_capture and eval_loss < 50)
+            is_strictly_forced = (legal_moves_count == 1)
+            is_forced = is_strictly_forced or (is_capture and eval_loss < 50)
             
             classification = self.classify_move(
                 move_rank=move_rank,
@@ -176,6 +195,7 @@ class MoveAnalyzer:
                 top_moves_count=top_moves_count,
                 depth_required=depth_limit,
                 is_forced=is_forced,
+                is_strictly_forced=is_strictly_forced,
                 is_capture=is_capture,
                 move_number=board.fullmove_number,
                 phase=phase,
@@ -205,19 +225,19 @@ class MoveAnalyzer:
 
     def classify_move(self, move_rank, eval_loss, normalized_loss, material_delta, 
                       eval_before, eval_after, top_moves_count, depth_required, 
-                      is_forced, is_capture, move_number, phase, criticality, is_mate_threat):
+                      is_forced, is_capture, move_number, phase, criticality, 
+                      is_mate_threat, is_strictly_forced=False):
         
         # Brilliant
-        if (move_rank <= 2 and 
-            material_delta <= -3 and 
-            top_moves_count <= 2 and 
-            criticality >= 150 and 
-            not is_forced and 
-            eval_loss <= 30):
+        
+        if (move_rank == 1 and 
+            material_delta <= -1 and 
+            eval_loss <= 20 and
+            not is_strictly_forced):
             return "brilliant"
 
         # Great
-        if (move_rank <= 3 and criticality >= 120 and eval_loss <= 10 and not is_forced):
+        if (move_rank <= 2 and criticality >= 100 and eval_loss <= 15 and not is_forced):
             return "great"
 
         # Critical
@@ -225,7 +245,7 @@ class MoveAnalyzer:
             return "critical"
 
         # Best
-        if move_rank == 1 and eval_loss <= 10:
+        if move_rank == 1 and eval_loss <= 15:
             return "best"
 
         # Book
