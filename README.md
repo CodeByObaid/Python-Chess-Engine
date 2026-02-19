@@ -10,14 +10,14 @@ A powerful, full-stack chess analysis application that provides Grandmaster-leve
 ## 🚀 Features
 
 ### 🧠 Advanced Move Analysis Engine
-*   **Automated Classification**: The core `MoveAnalyzer` class evaluates every move against Stockfish's optimal lines.
-    *   **Brilliant (!!)**: Detects material sacrifices that lead to a winning advantage (depth-verified).
-    *   **Great (!)**: Critical moves in complex positions that maintain an advantage.
-    *   **Best (★)**: The engine's top choice (or equivalent evaluation).
-    *   **Book (📖)**: Recognizes standard opening theory moves using an EPD-based opening database.
-    *   **Mistake (?) / Blunder (??)**: Calculated based on "Normalized Evaluation Loss" (Centipawn loss adjusted for the game phase and winning chances).
-*   **Phase Detection**: Dynamically identifies **Opening**, **Middlegame**, and **Endgame** phases to adjust analysis sensitivity.
-*   **Coach Reasoning**: Generates natural language explanations for *why* a move was good or bad (e.g., "You missed a forced mate sequence" or "You hung a piece").
+*   **Automated Classification**: The core `MoveAnalyzer` class (`analyzer.py`) evaluates every move against Stockfish's optimal lines using strict business rules.
+    *   **Brilliant (!!)**: Detects sound material sacrifices that lead to a winning advantage (verified by deep search).
+    *   **Great (!)**: The only good move in a difficult position, or a lesser sacrifice.
+    *   **Best (★)**: The engine's top choice (or a forced move / tied best).
+    *   **Book (📖)**: Recognizes standard opening theory moves (limited to the first 5 full moves).
+    *   **Mistake (?) / Blunder (??)**: Calculated based on win probability loss (e.g., losing > 20% win chance).
+*   **Accuracy Scoring**: Computes 0-100 accuracy scores based on win probability delta, position complexity, and material penalties.
+*   **Coach Reasoning**: Generates natural language explanations for *why* a move was good or bad (e.g., "You missed a forced mate sequence" or "Sacrifice unsound").
 
 ### 🔌 Robust Backend API (Flask)
 *   **`/analyze_full_game` Endpoint**:
@@ -29,7 +29,7 @@ A powerful, full-stack chess analysis application that provides Grandmaster-leve
     *   Integrates directly with the **Chess.com Public API**.
     *   Fetches game archives for any valid username.
     *   Parses JSON responses to extract PGNs, results, and opponent details.
-    *   Includes robust error handling and custom User-Agent headers to ensure reliable fetching.
+    *   Includes robust error handling and custom User-Agent headers.
 
 ### 🎨 Modern "Glassmorphism" UI
 *   **Interactive Board**: Built with `chessboard.js` and `chess.js` for seamless playback.
@@ -38,7 +38,7 @@ A powerful, full-stack chess analysis application that provides Grandmaster-leve
     *   **Best Move Arrows**: Automatically drawn with SVG when a player blunders, showing the missed opportunity.
 *   **Data Visualization**:
     *   **Advantage Chart**: Real-time Chart.js line graph showing the evaluation swing.
-    *   **Evaluation Bar**: Dynamic HTML/CSS bar tracking the winning probability.
+    *   **Evaluation Bar**: Dynamic HTML/CSS bar tracking the winning probability (absolute White perspective).
 *   **Responsive Design**: A dark-themed, glass-styled interface using CSS variables and backdrop filters.
 
 ---
@@ -47,21 +47,24 @@ A powerful, full-stack chess analysis application that provides Grandmaster-leve
 
 ### 1. Analysis Logic (`analyzer.py`)
 The heart of the system is the `MoveAnalyzer` class. It employs a multi-step evaluation pipeline:
-1.  **Pre-Move Analysis**: Runs Stockfish (MultiPV=5) on the position *before* the move to establish the baseline "Best" evaluation.
-2.  **Move Execution**: Pushes the player's move to the board.
-3.  **Post-Move Analysis**: Runs Stockfish again to determine the new evaluation.
-4.  **Delta Calculation**: Computes `eval_loss` (raw centipawn difference).
-5.  **Normalization**: Applies `normalize_loss()` to weigh mistakes differently in winning vs. losing positions (e.g., a +1.0 loss is huge in an equal game, but negligible if you are already +10.0).
-6.  **Classification Tree**: Passes all metrics (rank, loss, material delta, mate threats) into `classify_move()` to determine the move label.
+1.  **Pre-Move Analysis**: Uses provided engine evaluations of the position *before* the move.
+2.  **Move Execution**: Simulates the player's move.
+3.  **Post-Move Analysis**: Uses provided engine evaluations of the position *after* the move.
+4.  **Metric Calculation**: Computes `win_delta` (win probability loss), `material_delta`, and `accuracy`.
+5.  **Strict Business Rules**:
+    *   **Sacrifice Verification**: If a material sacrifice is detected, the engine re-verifies at higher depth to ensure soundness.
+    *   **Mate Detection**: Checks for forced mates, missed mates, and mate threats.
+    *   **Normalization**: Ensures CP scores are relative to the correct side before classification.
 
 ### 2. Opening Detection (`openings.py`)
 *   Uses **EPD (Extended Position Description)** hashing to identify openings.
-*   Hashes the board position (excluding clock/move counters) to find transpositions.
 *   Maps positions to a curated dictionary of **ECO (Encyclopedia of Chess Openings)** codes and names.
+*   **NOTE**: The Opening Book logic in `server.py` limits book moves to the first **5 full moves** of the game.
 
 ### 3. Server Integration (`server.py`)
 *   Manages the Stockfish process lifecycle (opens/closes engine context).
-*   Aggregates "Match Accuracy" by averaging the quality of all moves using an exponential decay formula based on normalized loss.
+*   Runs **MultiPV** searches to provide context (alternative moves) for the analyzer.
+*   Aggregates "Match Accuracy" and classifies the game outcome.
 
 ---
 
@@ -75,7 +78,7 @@ The heart of the system is the `MoveAnalyzer` class. It employs a multi-step eva
 
 2.  **Install Dependencies**:
     ```bash
-    pip install flask python-chess requests
+    pip install -r requirements.txt
     ```
 
 3.  **Setup Stockfish**:
@@ -108,11 +111,14 @@ The heart of the system is the `MoveAnalyzer` class. It employs a multi-step eva
 ├── analyzer.py          # Core logic for move classification and reasoning
 ├── server.py            # Flask server and API endpoints
 ├── openings.py          # ECO opening codes and detection logic
+├── book.py              # Legacy Opening Book manager
 ├── stockfish.exe        # Chess engine binary (not included in repo)
+├── requirements.txt     # Python dependencies
+├── .gitignore           # Git ignore rules
 ├── templates/
 │   └── index.html       # Main frontend application (Single Page App)
 └── static/
-    ├── css/             # Chessboard.js styles
+    ├── css/             # Stylesheets
     ├── img/             # Chesspieces graphics
     └── js/              # Client-side libraries (jquery, chessboard, chess.js)
 ```
